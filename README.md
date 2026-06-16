@@ -94,17 +94,19 @@ rather than a fixed generation cap.
 
 ## Topview
 
-The top-view figures below show the duck/canard branches after constraining
-`a_S_rel >= 0.6`. They are included only as geometry visuals, not as a recheck
-or performance-evidence section.
+The repository includes the final 12-branch topview gallery:
 
-![Duck branch topview grid](topview_duck_asrel60_80_20260616/topview_duck_asrel60_80_grid.png)
+- Full grid: `analysis_logic1_qt_avl_recheck_branch_compare/topview_grid.png`
+- Per-branch views: `analysis_logic1_qt_avl_recheck_branch_compare/top_view_by_branch/`
+- Summary CSV: `analysis_logic1_qt_avl_recheck_branch_compare/logic1_qt_branch_compare_summary.csv`
 
-Per-branch views:
+The gallery keeps the 9 normal branches from the previous qT analysis and uses
+the adjusted duck/canard branches with `a_S_rel >= 0.6` as the final duck
+configuration.
 
-- [`duck_1_x`](topview_duck_asrel60_80_20260616/top_view_by_branch/duck_1_x_topview_original_vs_duck_asrel60_80.png)
-- [`duck_2_x`](topview_duck_asrel60_80_20260616/top_view_by_branch/duck_2_x_topview_original_vs_duck_asrel60_80.png)
-- [`duck_3_x`](topview_duck_asrel60_80_20260616/top_view_by_branch/duck_3_x_topview_original_vs_duck_asrel60_80.png)
+Preview:
+
+![Logic1 qT topview comparison](analysis_logic1_qt_avl_recheck_branch_compare/topview_grid.png)
 
 ## Repository Hygiene
 

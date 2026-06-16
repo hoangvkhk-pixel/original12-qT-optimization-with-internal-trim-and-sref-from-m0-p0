@@ -23,4 +23,5 @@ analysis_*/
 !.gitignore
 !init_h500/**
 !models/**
-!topview_duck_asrel60_80_20260616/**
+!analysis_logic1_qt_avl_recheck_branch_compare/
+!analysis_logic1_qt_avl_recheck_branch_compare/**
