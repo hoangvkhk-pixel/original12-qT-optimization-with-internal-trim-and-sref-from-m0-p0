@@ -22,9 +22,9 @@ BRANCHES: list[BranchSpec] = [
     BranchSpec("normal_3_1", (0.2, 0.5), 1.0, 0.0, (30.0, 50.0)),
     BranchSpec("normal_3_2", (0.2, 0.5), 1.0, 0.5, (0.0, 0.0)),
     BranchSpec("normal_3_3", (0.2, 0.5), 1.0, 1.0, (30.0, 50.0)),
-    BranchSpec("duck_1_x", (0.5, 0.8), 0.0, 0.5, (0.0, 10.0)),
-    BranchSpec("duck_2_x", (0.5, 0.8), 0.5, 0.5, (0.0, 10.0)),
-    BranchSpec("duck_3_x", (0.5, 0.8), 1.0, 0.5, (0.0, 10.0)),
+    BranchSpec("duck_1_x", (0.6, 0.8), 0.0, 0.5, (0.0, 10.0)),
+    BranchSpec("duck_2_x", (0.6, 0.8), 0.5, 0.5, (0.0, 10.0)),
+    BranchSpec("duck_3_x", (0.6, 0.8), 1.0, 0.5, (0.0, 10.0)),
 ]
 
 TRAIN_H_BROAD_RANGE = (200.0, 5000.0)
