@@ -92,32 +92,19 @@ models/aero_mlp_original12_duck_qkhead_300k_hard40k
 `SHADE_MAX_GENERATIONS=0` means physical/convergence stopping controls the run
 rather than a fixed generation cap.
 
-## Duck-Clean Recheck Evidence
+## Topview
 
-The folder `topview_duck_asrel60_80_20260616` contains the AVL recheck summary
-and top-view figures for the three duck branches after constraining
-`a_S_rel >= 0.6`.
+The top-view figures below show the duck/canard branches after constraining
+`a_S_rel >= 0.6`. They are included only as geometry visuals, not as a recheck
+or performance-evidence section.
 
-![Duck clean topview grid](topview_duck_asrel60_80_20260616/topview_duck_asrel60_80_grid.png)
+![Duck branch topview grid](topview_duck_asrel60_80_20260616/topview_duck_asrel60_80_grid.png)
 
-Summary:
+Per-branch views:
 
-| branch | case | qT | mtow | cy | K | a_S_rel |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| duck_1_x | original AVL qT | 90.23 | 1464 | 0.570 | 28.14 | 0.800 |
-| duck_1_x | duck-clean MLP | 85.15 | 1380 | 0.599 | 28.14 | 0.800 |
-| duck_1_x | duck-clean AVL | 86.08 | 1421 | 0.564 | 28.64 | 0.800 |
-| duck_2_x | original AVL qT | 65.54 | 1254 | 0.598 | 33.26 | 0.500 |
-| duck_2_x | duck-clean MLP | 73.45 | 1193 | 0.599 | 28.21 | 0.800 |
-| duck_2_x | duck-clean AVL | 72.56 | 1264 | 0.524 | 30.24 | 0.800 |
-| duck_3_x | original AVL qT | 67.06 | 1269 | 0.574 | 32.89 | 0.501 |
-| duck_3_x | duck-clean MLP | 73.42 | 1189 | 0.598 | 28.15 | 0.800 |
-| duck_3_x | duck-clean AVL | 71.24 | 1249 | 0.534 | 30.43 | 0.800 |
-
-Interpretation: the original AVL qT duck_2/duck_3 solutions found lower qT by
-using `a_S_rel` close to `0.5`. The duck-clean branch forces a clearer canard
-configuration, so it is a geometry-policy constraint, not a guaranteed qT
-improvement.
+- [`duck_1_x`](topview_duck_asrel60_80_20260616/top_view_by_branch/duck_1_x_topview_original_vs_duck_asrel60_80.png)
+- [`duck_2_x`](topview_duck_asrel60_80_20260616/top_view_by_branch/duck_2_x_topview_original_vs_duck_asrel60_80.png)
+- [`duck_3_x`](topview_duck_asrel60_80_20260616/top_view_by_branch/duck_3_x_topview_original_vs_duck_asrel60_80.png)
 
 ## Repository Hygiene
 
