@@ -1,9 +1,0 @@
-numpy
-pandas
-scipy
-scikit-learn
-tensorflow
-joblib
-tqdm
-openpyxl
-

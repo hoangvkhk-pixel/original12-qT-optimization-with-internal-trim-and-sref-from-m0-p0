@@ -1,0 +1,98 @@
+from __future__ import annotations
+
+INPUT_COLS_V2 = [
+    "f_aspect",
+    "f_sweep",
+    "f_taper",
+    "f_twist",
+    "a_aspect",
+    "a_sweep",
+    "a_taper",
+    "a_twist",
+    "a_x_loc",
+    "a_S_rel",
+    "v_aspect",
+    "v_S_rel",
+    "scheme_fuse",
+    "scheme_vertical",
+    "a_dihedral_mag",
+    "margin",
+    "m0",
+    "V",
+    "H",
+    "p0",
+]
+
+OUTPUT_BALANCE_COLS = ["alpha_bal", "delta_bal", "center_mass", "aero_center", "A"]
+
+AERO_INPUT_COLS = [
+    "f_aspect",
+    "f_sweep",
+    "f_taper",
+    "f_twist",
+    "a_aspect",
+    "a_sweep",
+    "a_taper",
+    "a_twist",
+    "a_x_loc",
+    "a_S_rel",
+    "v_aspect",
+    "v_S_rel",
+    "scheme_fuse",
+    "scheme_vertical",
+    "a_dihedral_mag",
+    "S_ref",
+    "V",
+    "H",
+    "alpha",
+    "delta",
+]
+
+AERO_OUTPUT_COLS = ["cx", "cy", "mz_ref", "mx_beta", "my_beta", "K"]
+
+# Conservative first-pass bounds (can be tuned after first data audit)
+BOUNDS_V2 = {
+    "f_aspect": (4.0, 15.0),
+    "f_sweep": (0.0, 45.0),
+    "f_taper": (1.0, 3.0),
+    "f_twist": (-5.0, 5.0),
+    "a_aspect": (4.0, 15.0),
+    "a_sweep": (-45.0, 45.0),
+    "a_taper": (1.0, 3.0),
+    "a_twist": (-5.0, 5.0),
+    "a_x_loc": (2.0, 6.0),
+    "a_S_rel": (0.10, 0.90),
+    "v_aspect": (2.0, 4.0),
+    "v_S_rel": (0.05, 0.30),
+    "scheme_fuse": (0.0, 1.0),
+    "scheme_vertical": (0.0, 1.0),
+    "a_dihedral_mag": (0.0, 20.0),
+    "margin": (-0.30, 0.30),
+    "m0": (500.0, 3000.0),
+    "V": (30.0, 90.0),
+    "H": (0.0, 10000.0),
+    "p0": (5.0, 110.0),
+}
+
+AERO_BOUNDS_V2 = {
+    "f_aspect": BOUNDS_V2["f_aspect"],
+    "f_sweep": BOUNDS_V2["f_sweep"],
+    "f_taper": BOUNDS_V2["f_taper"],
+    "f_twist": BOUNDS_V2["f_twist"],
+    "a_aspect": BOUNDS_V2["a_aspect"],
+    "a_sweep": BOUNDS_V2["a_sweep"],
+    "a_taper": BOUNDS_V2["a_taper"],
+    "a_twist": BOUNDS_V2["a_twist"],
+    "a_x_loc": BOUNDS_V2["a_x_loc"],
+    "a_S_rel": BOUNDS_V2["a_S_rel"],
+    "v_aspect": BOUNDS_V2["v_aspect"],
+    "v_S_rel": BOUNDS_V2["v_S_rel"],
+    "scheme_fuse": BOUNDS_V2["scheme_fuse"],
+    "scheme_vertical": BOUNDS_V2["scheme_vertical"],
+    "a_dihedral_mag": BOUNDS_V2["a_dihedral_mag"],
+    "S_ref": (1.0, 80.0),
+    "V": BOUNDS_V2["V"],
+    "H": BOUNDS_V2["H"],
+    "alpha": (-20.0, 20.0),
+    "delta": (-5.0, 5.0),
+}
