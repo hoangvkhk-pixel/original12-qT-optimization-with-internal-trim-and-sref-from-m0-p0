@@ -92,6 +92,22 @@ models/aero_mlp_original12_duck_qkhead_300k_hard40k
 `SHADE_MAX_GENERATIONS=0` means physical/convergence stopping controls the run
 rather than a fixed generation cap.
 
+
+## Batch MLP Speed
+
+The MLP backend now uses batched surrogate prediction inside the trim and aerodynamic evaluation path. This is an implementation-level acceleration only: the design vector, `S_ref = m0 / p0` sizing logic, internal trim equations, and `q_g_per_ton_km` objective are unchanged.
+
+Measured on the 12-branch qT Logic 1 case:
+
+```text
+qT AVL Logic 1 baseline   : 32.199 h / 12 branches
+qT MLP batch workflow     :  2.442 h / 12 branches
+Speed-up vs AVL baseline  : 13.2x
+Runtime reduction         : 92.4%
+```
+
+A separate qT MLP run with the additional `D_omega_z <= -10` damping constraint took 2.339 h for 12 branches, corresponding to about 13.8x speed-up versus the same AVL baseline. That damping-constrained result is reported separately because it adds a design constraint rather than being a pure batch-only timing comparison.
+
 ## Topview
 
 The repository includes the final 12-branch topview gallery:

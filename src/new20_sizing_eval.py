@@ -13,6 +13,7 @@ import pandas as pd
 
 from problem_v2_spec import AERO_INPUT_COLS, AERO_OUTPUT_COLS, INPUT_COLS_V2
 from branch_geometry_v2 import build_geom_from_row
+import profile_timing as prof
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -194,12 +195,25 @@ class MlpBackend:
         return float(cx), float(cy), float(mz_ref), float(mx_beta), float(my_beta)
 
     def predict_outputs(self, case: dict[str, float], alpha: float, delta: float) -> dict[str, float]:
+        return self.predict_outputs_batch(case, [alpha], [delta])[0]
+
+    def predict_outputs_batch(self, case: dict[str, float], alpha: list[float] | np.ndarray, delta: list[float] | np.ndarray) -> list[dict[str, float]]:
+        alpha_arr = np.asarray(alpha, dtype=float).reshape(-1)
+        delta_arr = np.asarray(delta, dtype=float).reshape(-1)
+        if alpha_arr.shape != delta_arr.shape:
+            raise ValueError(f"alpha and delta batch shapes differ: {alpha_arr.shape} vs {delta_arr.shape}")
         vals = [case[k] for k in AERO_INPUT_COLS[:-2]]
-        vals.extend([alpha, delta])
-        x = np.asarray(vals, dtype=np.float32).reshape(1, -1)
-        y_s = self.model.predict(self.sx.transform(x), verbose=0)
-        y = self.sy.inverse_transform(y_s)[0]
-        return {name: float(y[i]) for i, name in enumerate(self.output_cols[: len(y)])}
+        rows = []
+        for a_i, d_i in zip(alpha_arr, delta_arr):
+            row = list(vals)
+            row.extend([float(a_i), float(d_i)])
+            rows.append(row)
+        x = np.asarray(rows, dtype=np.float32)
+        with prof.timer("mlp_predict"):
+            y_s = self.model.predict(self.sx.transform(x), verbose=0)
+            y = self.sy.inverse_transform(y_s)
+        cols = self.output_cols[: y.shape[1]]
+        return [{name: float(row[i]) for i, name in enumerate(cols)} for row in y]
 
 
 class SplitMlpBackend:
@@ -224,9 +238,23 @@ class SplitMlpBackend:
     def predict_outputs(self, case: dict[str, float], alpha: float, delta: float) -> dict[str, float]:
         return self.select_backend(case).predict_outputs(case, alpha, delta)
 
+    def predict_outputs_batch(self, case: dict[str, float], alpha: list[float] | np.ndarray, delta: list[float] | np.ndarray) -> list[dict[str, float]]:
+        return self.select_backend(case).predict_outputs_batch(case, alpha, delta)
+
 
 def is_mlp_like_backend(backend: AeroBackend) -> bool:
     return isinstance(backend, (MlpBackend, SplitMlpBackend))
+
+
+def mlp_batch_enabled() -> bool:
+    return os.environ.get("NEW20_MLP_BATCH", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _k_from_prediction(pred: dict[str, float], cx: float, cy: float) -> float:
+    use_direct = os.environ.get("NEW20_USE_DIRECT_K", "0").strip().lower() in {"1", "true", "yes", "on"}
+    if use_direct and "K" in pred and np.isfinite(pred["K"]):
+        return float(pred["K"])
+    return float(cy / cx) if abs(cx) > 1e-12 else 0.0
 
 
 def backend_direct_k(
@@ -257,6 +285,63 @@ def cruise_trim(case: dict[str, float], backend: AeroBackend, kk: int) -> dict[s
     aero_center = np.zeros(n_delta)
     mz0 = np.zeros(n_delta)
     mz_cg = np.zeros((n_delta, n_alpha))
+
+    if is_mlp_like_backend(backend) and mlp_batch_enabled():
+        batch_alpha = []
+        batch_delta = []
+        for delta in delta_vals:
+            for alpha in alpha_vals:
+                batch_alpha.append(float(alpha))
+                batch_delta.append(float(delta))
+        preds = backend.predict_outputs_batch(case, batch_alpha, batch_delta)  # type: ignore[attr-defined]
+        pos = 0
+        for i in range(n_delta):
+            for j in range(n_alpha):
+                cy[i, j] = preds[pos]["cy"]
+                mz_ref[i, j] = preds[pos]["mz_ref"]
+                pos += 1
+
+        for i in range(n_delta):
+            coeff = np.polyfit(cy[i], mz_ref[i], deg=1)
+            aero_center[i] = -float(coeff[0])
+            mz0[i] = float(coeff[1])
+
+        for i in range(n_delta):
+            ac_i = aero_center[i]
+            if abs(ac_i) < 1e-12:
+                mz_cg[i, :] = mz_ref[i, :]
+            else:
+                mz_cg[i, :] = (mz_ref[i, :] - mz0[i]) * (-case["margin"]) / ac_i + mz0[i]
+
+        coeff_mz = polyfit2d(alpha_vals, delta_vals, mz_cg)
+        coeff_cy = polyfit2d(alpha_vals, delta_vals, cy)
+        hs = np.array([[coeff_mz[1], coeff_mz[2]], [coeff_cy[1], coeff_cy[2]]], dtype=float)
+        rhs = np.array([-coeff_mz[0], case["cy_req"] - coeff_cy[0]], dtype=float)
+        alpha_bal, delta_bal = np.linalg.solve(hs, rhs)
+        aero_center_est = float(np.interp(delta_bal, delta_vals, aero_center))
+        dmz_dcy = -aero_center_est
+        center_mass = float(aero_center_est + case["margin"])
+
+        final_pred = backend.predict_outputs_batch(case, [float(alpha_bal)], [float(delta_bal)])[0]  # type: ignore[attr-defined]
+        cx = float(final_pred["cx"])
+        cy_final = float(final_pred["cy"])
+        mz_final = float(coeff_mz[0] + coeff_mz[1] * alpha_bal + coeff_mz[2] * delta_bal)
+        mx_beta = float(final_pred["mx_beta"])
+        my_beta = float(final_pred["my_beta"])
+        k_val = _k_from_prediction(final_pred, cx, cy_final)
+        return {
+            "alpha": float(alpha_bal),
+            "delta": float(delta_bal),
+            "aero_center": aero_center_est,
+            "dmz_dcy": float(dmz_dcy),
+            "center_mass": center_mass,
+            "cx": cx,
+            "cy": cy_final,
+            "mz": mz_final,
+            "mx_beta": mx_beta,
+            "my_beta": my_beta,
+            "K": float(k_val),
+        }
 
     for i, delta in enumerate(delta_vals):
         for j, alpha in enumerate(alpha_vals):
@@ -321,6 +406,28 @@ def alpha_search_phase(case: dict[str, float], backend: AeroBackend, kk: int, v_
     alpha_vals = np.array([-10.0, 10.0], dtype=float)
     cy_vals = []
     mz_vals = []
+    if is_mlp_like_backend(backend) and mlp_batch_enabled():
+        preds = backend.predict_outputs_batch(local, alpha_vals, np.zeros_like(alpha_vals))  # type: ignore[attr-defined]
+        cy_vals = [float(p["cy"]) for p in preds]
+        mz_vals = [float(p["mz_ref"]) for p in preds]
+        alpha_bal = float(np.interp(target, cy_vals, alpha_vals))
+        slope = (mz_vals[-1] - mz_vals[0]) / (cy_vals[-1] - cy_vals[0]) if abs(cy_vals[-1] - cy_vals[0]) > 1e-12 else 0.0
+        center_mass = float(-slope + case["margin"])
+        final_pred = backend.predict_outputs_batch(local, [alpha_bal], [0.0])[0]  # type: ignore[attr-defined]
+        cx = float(final_pred["cx"])
+        cy = float(final_pred["cy"])
+        k_val = _k_from_prediction(final_pred, cx, cy)
+        return {
+            "alpha": alpha_bal,
+            "delta": 0.0,
+            "center_mass": center_mass,
+            "cx": cx,
+            "cy": cy,
+            "mz": float(final_pred["mz_ref"]),
+            "K": float(k_val),
+            "cy_target": float(target),
+        }
+
     for i, alpha in enumerate(alpha_vals):
         _, cy_i, mz_i, _, _ = backend.eval(local, float(alpha), 0.0, kk + i)
         cy_vals.append(cy_i)
