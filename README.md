@@ -97,7 +97,7 @@ rather than a fixed generation cap.
 
 The MLP backend now uses batched surrogate prediction inside the trim and aerodynamic evaluation path. This is an implementation-level acceleration only: the design vector, `S_ref = m0 / p0` sizing logic, internal trim equations, and `q_g_per_ton_km` objective are unchanged.
 
-Measured on the 12-branch qT Logic 1 case:
+Measured on the 12-branch qT Logic 1 case using an Intel Core i5-12400F machine with 10 CPU workers and 16 GB RAM:
 
 ```text
 qT AVL Logic 1 baseline   : 32.199 h / 12 branches
