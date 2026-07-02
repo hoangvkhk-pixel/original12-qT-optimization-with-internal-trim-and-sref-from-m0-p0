@@ -257,6 +257,55 @@ def _k_from_prediction(pred: dict[str, float], cx: float, cy: float) -> float:
     return float(cy / cx) if abs(cx) > 1e-12 else 0.0
 
 
+def _cya_alpha(lift_surface_geo_char: np.ndarray, mach: float) -> float:
+    aspect = float(lift_surface_geo_char[0])
+    sweep = float(lift_surface_geo_char[1])
+    if aspect <= 0.0:
+        return 0.0
+    span, root_chord, tip_chord = ac.lift_surface_def(lift_surface_geo_char)
+    if abs(span) < 1e-12:
+        return 0.0
+    beta = math.sqrt(max(0.0, 1.0 - float(mach) ** 2))
+    tan_khi_1to2 = math.tan(math.radians(abs(sweep))) - (root_chord - tip_chord) / span
+    tg = math.sqrt(max(0.0, 0.9 * aspect ** 2 * (beta ** 2 + tan_khi_1to2) + 4.0))
+    return float(2.0 * math.pi * aspect / (2.0 + tg))
+
+
+def pitch_damping_omegaz(case: dict[str, float], center_mass: float) -> float:
+    local = with_secondary_inputs(case, max(1.0, float(case["m0"])))
+    f_geo, a_geo, _v_geo, _fuse_geo, _scheme_fuse = build_geom_from_row(local, ac)
+    s_ref = float(local["S_ref"])
+    if s_ref <= 0.0:
+        return 0.0
+    s2_rel = float(a_geo[6]) / s_ref
+    if s2_rel <= 1e-12 or s2_rel >= 1.0 - 1e-12:
+        return 0.0
+    mac = ac.ref_dim_lift_surface(f_geo) if f_geo[6] >= a_geo[6] else ac.ref_dim_lift_surface(a_geo)
+    mach, _re = ac.Mach_Reynolds_number(float(local["V"]), mac, float(local["H"]))
+    _a_vol, l_arm = ac.vol_coeff(f_geo, a_geo, float(center_mass))
+    s2_to_s1 = s2_rel / (1.0 - s2_rel)
+    cya_f = _cya_alpha(f_geo, mach)
+    cya_a = _cya_alpha(a_geo, mach)
+    kv = float(os.environ.get("NEW20_DAMP_KV", "0.93"))
+    if f_geo[6] >= a_geo[6]:
+        mz_f = -cya_f / 4.0 * (1.0 - 2.0 * abs(float(center_mass))) ** 2 - (2.0 * math.pi - cya_f) / 16.0
+        mz_a = -cya_a * s2_to_s1 * (float(l_arm) ** 2) * math.sqrt(kv)
+    else:
+        mz_f = -cya_f * (1.0 / s2_to_s1) * (float(l_arm) ** 2)
+        mz_a = (-cya_a / 4.0 * (1.0 - 2.0 * abs(float(center_mass))) ** 2 - (2.0 * math.pi - cya_a) / 16.0) * math.sqrt(kv)
+    return float(mz_f + 1.5 * mz_a)
+
+
+def pitch_damping_population(population: np.ndarray, info_aircraft: np.ndarray) -> np.ndarray:
+    pop = np.asarray(population, dtype=float)
+    info = np.asarray(info_aircraft, dtype=float)
+    out = []
+    for i in range(pop.shape[0]):
+        case = {name: float(pop[i, j]) for j, name in enumerate(INPUT_COLS_V2)}
+        out.append(pitch_damping_omegaz(case, float(info[i, INFO_COLS.index("center_mass")])))
+    return np.asarray(out, dtype=float)
+
+
 def backend_direct_k(
     case: dict[str, float],
     backend: AeroBackend,
@@ -286,22 +335,69 @@ def cruise_trim(case: dict[str, float], backend: AeroBackend, kk: int) -> dict[s
     mz0 = np.zeros(n_delta)
     mz_cg = np.zeros((n_delta, n_alpha))
 
-    if is_mlp_like_backend(backend) and mlp_batch_enabled():
-        batch_alpha = []
-        batch_delta = []
-        for delta in delta_vals:
-            for alpha in alpha_vals:
-                batch_alpha.append(float(alpha))
-                batch_delta.append(float(delta))
-        preds = backend.predict_outputs_batch(case, batch_alpha, batch_delta)  # type: ignore[attr-defined]
-        pos = 0
-        for i in range(n_delta):
-            for j in range(n_alpha):
-                cy[i, j] = preds[pos]["cy"]
-                mz_ref[i, j] = preds[pos]["mz_ref"]
-                pos += 1
+    with prof.timer("trim_cruise", kk=kk):
+        if is_mlp_like_backend(backend) and mlp_batch_enabled():
+            batch_alpha = []
+            batch_delta = []
+            for delta in delta_vals:
+                for alpha in alpha_vals:
+                    batch_alpha.append(float(alpha))
+                    batch_delta.append(float(delta))
+            preds = backend.predict_outputs_batch(case, batch_alpha, batch_delta)  # type: ignore[attr-defined]
+            pos = 0
+            for i in range(n_delta):
+                for j in range(n_alpha):
+                    cy[i, j] = preds[pos]["cy"]
+                    mz_ref[i, j] = preds[pos]["mz_ref"]
+                    pos += 1
 
-        for i in range(n_delta):
+            for i in range(n_delta):
+                coeff = np.polyfit(cy[i], mz_ref[i], deg=1)
+                aero_center[i] = -float(coeff[0])
+                mz0[i] = float(coeff[1])
+
+            for i in range(n_delta):
+                ac_i = aero_center[i]
+                if abs(ac_i) < 1e-12:
+                    mz_cg[i, :] = mz_ref[i, :]
+                else:
+                    mz_cg[i, :] = (mz_ref[i, :] - mz0[i]) * (-case["margin"]) / ac_i + mz0[i]
+
+            coeff_mz = polyfit2d(alpha_vals, delta_vals, mz_cg)
+            coeff_cy = polyfit2d(alpha_vals, delta_vals, cy)
+            hs = np.array([[coeff_mz[1], coeff_mz[2]], [coeff_cy[1], coeff_cy[2]]], dtype=float)
+            rhs = np.array([-coeff_mz[0], case["cy_req"] - coeff_cy[0]], dtype=float)
+            alpha_bal, delta_bal = np.linalg.solve(hs, rhs)
+            aero_center_est = float(np.interp(delta_bal, delta_vals, aero_center))
+            dmz_dcy = -aero_center_est
+            center_mass = float(aero_center_est + case["margin"])
+
+            final_pred = backend.predict_outputs_batch(case, [float(alpha_bal)], [float(delta_bal)])[0]  # type: ignore[attr-defined]
+            cx = float(final_pred["cx"])
+            cy_final = float(final_pred["cy"])
+            mz_final = float(coeff_mz[0] + coeff_mz[1] * alpha_bal + coeff_mz[2] * delta_bal)
+            mx_beta = float(final_pred["mx_beta"])
+            my_beta = float(final_pred["my_beta"])
+            k_val = _k_from_prediction(final_pred, cx, cy_final)
+            return {
+                "alpha": float(alpha_bal),
+                "delta": float(delta_bal),
+                "aero_center": aero_center_est,
+                "dmz_dcy": float(dmz_dcy),
+                "center_mass": center_mass,
+                "cx": cx,
+                "cy": cy_final,
+                "mz": mz_final,
+                "mx_beta": mx_beta,
+                "my_beta": my_beta,
+                "K": float(k_val),
+            }
+
+        for i, delta in enumerate(delta_vals):
+            for j, alpha in enumerate(alpha_vals):
+                _, cy_ij, mz_ij, _, _ = backend.eval(case, float(alpha), float(delta), kk + 10 * i + j)
+                cy[i, j] = cy_ij
+                mz_ref[i, j] = mz_ij
             coeff = np.polyfit(cy[i], mz_ref[i], deg=1)
             aero_center[i] = -float(coeff[0])
             mz0[i] = float(coeff[1])
@@ -322,60 +418,14 @@ def cruise_trim(case: dict[str, float], backend: AeroBackend, kk: int) -> dict[s
         dmz_dcy = -aero_center_est
         center_mass = float(aero_center_est + case["margin"])
 
-        final_pred = backend.predict_outputs_batch(case, [float(alpha_bal)], [float(delta_bal)])[0]  # type: ignore[attr-defined]
-        cx = float(final_pred["cx"])
-        cy_final = float(final_pred["cy"])
-        mz_final = float(coeff_mz[0] + coeff_mz[1] * alpha_bal + coeff_mz[2] * delta_bal)
-        mx_beta = float(final_pred["mx_beta"])
-        my_beta = float(final_pred["my_beta"])
-        k_val = _k_from_prediction(final_pred, cx, cy_final)
-        return {
-            "alpha": float(alpha_bal),
-            "delta": float(delta_bal),
-            "aero_center": aero_center_est,
-            "dmz_dcy": float(dmz_dcy),
-            "center_mass": center_mass,
-            "cx": cx,
-            "cy": cy_final,
-            "mz": mz_final,
-            "mx_beta": mx_beta,
-            "my_beta": my_beta,
-            "K": float(k_val),
-        }
+        cx, cy_final, mz_final, _, _ = backend.eval(
+            case, float(alpha_bal), float(delta_bal), kk + 500, center_mass=center_mass
+        )
+        if is_mlp_like_backend(backend):
+            mz_final = float(coeff_mz[0] + coeff_mz[1] * alpha_bal + coeff_mz[2] * delta_bal)
 
-    for i, delta in enumerate(delta_vals):
-        for j, alpha in enumerate(alpha_vals):
-            _, cy_ij, mz_ij, _, _ = backend.eval(case, float(alpha), float(delta), kk + 10 * i + j)
-            cy[i, j] = cy_ij
-            mz_ref[i, j] = mz_ij
-        coeff = np.polyfit(cy[i], mz_ref[i], deg=1)
-        aero_center[i] = -float(coeff[0])
-        mz0[i] = float(coeff[1])
-
-    for i in range(n_delta):
-        ac_i = aero_center[i]
-        if abs(ac_i) < 1e-12:
-            mz_cg[i, :] = mz_ref[i, :]
-        else:
-            mz_cg[i, :] = (mz_ref[i, :] - mz0[i]) * (-case["margin"]) / ac_i + mz0[i]
-
-    coeff_mz = polyfit2d(alpha_vals, delta_vals, mz_cg)
-    coeff_cy = polyfit2d(alpha_vals, delta_vals, cy)
-    hs = np.array([[coeff_mz[1], coeff_mz[2]], [coeff_cy[1], coeff_cy[2]]], dtype=float)
-    rhs = np.array([-coeff_mz[0], case["cy_req"] - coeff_cy[0]], dtype=float)
-    alpha_bal, delta_bal = np.linalg.solve(hs, rhs)
-    aero_center_est = float(np.interp(delta_bal, delta_vals, aero_center))
-    dmz_dcy = -aero_center_est
-    center_mass = float(aero_center_est + case["margin"])
-
-    cx, cy_final, mz_final, _, _ = backend.eval(
-        case, float(alpha_bal), float(delta_bal), kk + 500, center_mass=center_mass
-    )
-    if is_mlp_like_backend(backend):
-        mz_final = float(coeff_mz[0] + coeff_mz[1] * alpha_bal + coeff_mz[2] * delta_bal)
-
-    mx_beta, my_beta = stability_beta(case, backend, kk + 700, float(alpha_bal), float(delta_bal), center_mass)
-    k_val = backend_direct_k(case, backend, float(alpha_bal), float(delta_bal), kk + 500, center_mass, float(cx), float(cy_final))
+        mx_beta, my_beta = stability_beta(case, backend, kk + 700, float(alpha_bal), float(delta_bal), center_mass)
+        k_val = backend_direct_k(case, backend, float(alpha_bal), float(delta_bal), kk + 500, center_mass, float(cx), float(cy_final))
     return {
         "alpha": float(alpha_bal),
         "delta": float(delta_bal),
@@ -406,37 +456,38 @@ def alpha_search_phase(case: dict[str, float], backend: AeroBackend, kk: int, v_
     alpha_vals = np.array([-10.0, 10.0], dtype=float)
     cy_vals = []
     mz_vals = []
-    if is_mlp_like_backend(backend) and mlp_batch_enabled():
-        preds = backend.predict_outputs_batch(local, alpha_vals, np.zeros_like(alpha_vals))  # type: ignore[attr-defined]
-        cy_vals = [float(p["cy"]) for p in preds]
-        mz_vals = [float(p["mz_ref"]) for p in preds]
+    with prof.timer("alpha_search_phase", kk=kk, theta=float(theta)):
+        if is_mlp_like_backend(backend) and mlp_batch_enabled():
+            preds = backend.predict_outputs_batch(local, alpha_vals, np.zeros_like(alpha_vals))  # type: ignore[attr-defined]
+            cy_vals = [float(p["cy"]) for p in preds]
+            mz_vals = [float(p["mz_ref"]) for p in preds]
+            alpha_bal = float(np.interp(target, cy_vals, alpha_vals))
+            slope = (mz_vals[-1] - mz_vals[0]) / (cy_vals[-1] - cy_vals[0]) if abs(cy_vals[-1] - cy_vals[0]) > 1e-12 else 0.0
+            center_mass = float(-slope + case["margin"])
+            final_pred = backend.predict_outputs_batch(local, [alpha_bal], [0.0])[0]  # type: ignore[attr-defined]
+            cx = float(final_pred["cx"])
+            cy = float(final_pred["cy"])
+            k_val = _k_from_prediction(final_pred, cx, cy)
+            return {
+                "alpha": alpha_bal,
+                "delta": 0.0,
+                "center_mass": center_mass,
+                "cx": cx,
+                "cy": cy,
+                "mz": float(final_pred["mz_ref"]),
+                "K": float(k_val),
+                "cy_target": float(target),
+            }
+
+        for i, alpha in enumerate(alpha_vals):
+            _, cy_i, mz_i, _, _ = backend.eval(local, float(alpha), 0.0, kk + i)
+            cy_vals.append(cy_i)
+            mz_vals.append(mz_i)
         alpha_bal = float(np.interp(target, cy_vals, alpha_vals))
         slope = (mz_vals[-1] - mz_vals[0]) / (cy_vals[-1] - cy_vals[0]) if abs(cy_vals[-1] - cy_vals[0]) > 1e-12 else 0.0
         center_mass = float(-slope + case["margin"])
-        final_pred = backend.predict_outputs_batch(local, [alpha_bal], [0.0])[0]  # type: ignore[attr-defined]
-        cx = float(final_pred["cx"])
-        cy = float(final_pred["cy"])
-        k_val = _k_from_prediction(final_pred, cx, cy)
-        return {
-            "alpha": alpha_bal,
-            "delta": 0.0,
-            "center_mass": center_mass,
-            "cx": cx,
-            "cy": cy,
-            "mz": float(final_pred["mz_ref"]),
-            "K": float(k_val),
-            "cy_target": float(target),
-        }
-
-    for i, alpha in enumerate(alpha_vals):
-        _, cy_i, mz_i, _, _ = backend.eval(local, float(alpha), 0.0, kk + i)
-        cy_vals.append(cy_i)
-        mz_vals.append(mz_i)
-    alpha_bal = float(np.interp(target, cy_vals, alpha_vals))
-    slope = (mz_vals[-1] - mz_vals[0]) / (cy_vals[-1] - cy_vals[0]) if abs(cy_vals[-1] - cy_vals[0]) > 1e-12 else 0.0
-    center_mass = float(-slope + case["margin"])
-    cx, cy, mz, _, _ = backend.eval(local, alpha_bal, 0.0, kk + 20, center_mass=center_mass)
-    k_val = backend_direct_k(local, backend, alpha_bal, 0.0, kk + 20, center_mass, float(cx), float(cy))
+        cx, cy, mz, _, _ = backend.eval(local, alpha_bal, 0.0, kk + 20, center_mass=center_mass)
+        k_val = backend_direct_k(local, backend, alpha_bal, 0.0, kk + 20, center_mass, float(cx), float(cy))
     return {
         "alpha": alpha_bal,
         "delta": 0.0,
@@ -470,34 +521,36 @@ def safe_p2w(v: float, k_val: float, alpha: float, theta: float, eff: float = 0.
 
 
 def phase_sizing(case: dict[str, float], phase: dict[str, float], m0: float, t: float, theta: float, w_rpm: float, gamma: float, ce: float, type_power: str) -> dict[str, float]:
-    rho = 1.225 * (1 - case["H"] / 44300) ** 4.256
-    s_ref = case["S_ref"]
-    v = case["V"] if theta == 0 else 0.9 * case["V"]
-    x_force = phase["cx"] * rho * v ** 2 * s_ref / 2
-    thrust = (x_force + m0 * 9.81 * np.sin(np.deg2rad(theta))) / np.cos(np.deg2rad(phase["alpha"]))
-    p2w = safe_p2w(v, phase["K"], phase["alpha"], theta)
-    m_pow = sz.m_power(p2w, gamma)
-    m_fue = sz.m_batery(0.2, p2w, t, 0.7, 0.7) if type_power == "eltr" else sz.m_fuel_cl(p2w, t, ce)
-    thrust_for_sizing = thrust if np.isfinite(thrust) and thrust > 0 else 0.0
-    m_v, d_v = sz.mvinta_DBC(thrust_for_sizing, w_rpm, case["H"])
+    with prof.timer("mission_sizing_phase", theta=float(theta)):
+        rho = 1.225 * (1 - case["H"] / 44300) ** 4.256
+        s_ref = case["S_ref"]
+        v = case["V"] if theta == 0 else 0.9 * case["V"]
+        x_force = phase["cx"] * rho * v ** 2 * s_ref / 2
+        thrust = (x_force + m0 * 9.81 * np.sin(np.deg2rad(theta))) / np.cos(np.deg2rad(phase["alpha"]))
+        p2w = safe_p2w(v, phase["K"], phase["alpha"], theta)
+        m_pow = sz.m_power(p2w, gamma)
+        m_fue = sz.m_batery(0.2, p2w, t, 0.7, 0.7) if type_power == "eltr" else sz.m_fuel_cl(p2w, t, ce)
+        thrust_for_sizing = thrust if np.isfinite(thrust) and thrust > 0 else 0.0
+        m_v, d_v = sz.mvinta_DBC(thrust_for_sizing, w_rpm, case["H"])
     return {"m_V": float(m_v), "D_V": float(d_v), "m_pow": float(m_pow), "m_fue": float(m_fue), "p2w": float(p2w)}
 
 
 def mission_phase_profile(case: dict[str, float], mission_l_km: float) -> dict[str, float]:
-    v = float(case["V"])
-    h = max(0.0, float(case["H"]))
-    theta_cl = np.deg2rad(5.0)
-    theta_dc = np.deg2rad(30.0)
-    l_climb_km = h / np.tan(theta_cl) / 1000.0
-    l_declimb_km = h / np.tan(theta_dc) / 1000.0
-    l_cruise_km = float(mission_l_km) - l_climb_km - l_declimb_km
-    if v <= 0.0 or l_cruise_km <= 0.0:
-        raise ValueError(
-            f"Invalid mission profile: V={v}, H={h}, L_cruise_km={l_cruise_km}"
-        )
-    t_cruise_h = l_cruise_km / (v * 3.6)
-    t_climb_h = h / (0.9 * v * np.sin(theta_cl)) / 3600.0
-    t_declimb_h = h / (0.9 * v * np.sin(theta_dc)) / 3600.0
+    with prof.timer("mission_profile"):
+        v = float(case["V"])
+        h = max(0.0, float(case["H"]))
+        theta_cl = np.deg2rad(5.0)
+        theta_dc = np.deg2rad(30.0)
+        l_climb_km = h / np.tan(theta_cl) / 1000.0
+        l_declimb_km = h / np.tan(theta_dc) / 1000.0
+        l_cruise_km = float(mission_l_km) - l_climb_km - l_declimb_km
+        if v <= 0.0 or l_cruise_km <= 0.0:
+            raise ValueError(
+                f"Invalid mission profile: V={v}, H={h}, L_cruise_km={l_cruise_km}"
+            )
+        t_cruise_h = l_cruise_km / (v * 3.6)
+        t_climb_h = h / (0.9 * v * np.sin(theta_cl)) / 3600.0
+        t_declimb_h = h / (0.9 * v * np.sin(theta_dc)) / 3600.0
     return {
         "L_mission_km": float(mission_l_km),
         "L_cruise_km": float(l_cruise_km),
@@ -522,15 +575,17 @@ def _candidate_core(
     type_power: str,
     mpay: float,
 ):
-    f_geo, a_geo, v_geo, fuse_geo, scheme_fuse = build_geom_from_row(row, ac)
-    cruise = cruise_trim(row, backend, kk_base)
-    climb = alpha_search_phase(row, backend, kk_base + 2000, 0.9 * row["V"], 5.0)
-    declimb = alpha_search_phase(row, backend, kk_base + 3000, 0.9 * row["V"], -30.0)
-    mission = mission_phase_profile(row, mission_l_km)
+    with prof.timer("candidate_core", kk_base=kk_base):
+        f_geo, a_geo, v_geo, fuse_geo, scheme_fuse = build_geom_from_row(row, ac)
+        cruise = cruise_trim(row, backend, kk_base)
+        climb = alpha_search_phase(row, backend, kk_base + 2000, 0.9 * row["V"], 5.0)
+        declimb = alpha_search_phase(row, backend, kk_base + 3000, 0.9 * row["V"], -30.0)
+        mission = mission_phase_profile(row, mission_l_km)
 
-    cr_sz = phase_sizing(row, cruise, m0, mission["t_cruise_h"], 0.0, w_rpm, gamma, ce2, type_power)
-    cl_sz = phase_sizing(row, climb, m0, mission["t_climb_h"], 5.0, w_rpm, gamma, ce1, type_power)
-    dc_sz = phase_sizing(row, declimb, m0, mission["t_declimb_h"], -30.0, w_rpm, gamma, ce1, type_power)
+        with prof.timer("mission_sizing_total", kk_base=kk_base):
+            cr_sz = phase_sizing(row, cruise, m0, mission["t_cruise_h"], 0.0, w_rpm, gamma, ce2, type_power)
+            cl_sz = phase_sizing(row, climb, m0, mission["t_climb_h"], 5.0, w_rpm, gamma, ce1, type_power)
+            dc_sz = phase_sizing(row, declimb, m0, mission["t_declimb_h"], -30.0, w_rpm, gamma, ce1, type_power)
 
     m_v = max(cr_sz["m_V"], cl_sz["m_V"], dc_sz["m_V"])
     d_v = cr_sz["D_V"]
@@ -605,18 +660,24 @@ def geometry_freecad_outputs(case: dict[str, float], f_geo: np.ndarray, a_geo: n
 
     v_loc = float(case["a_x_loc"])
     fuse_d = float(fuse_geo[3])
+    a_z_render = [float(a_z[0]), float(a_z[1])]
+    a_dihedral_render = float(a_geo[4])
+    if abs(a_dihedral_render) > 1e-12:
+        a_half_span = abs(float(a_y[1]) - float(a_y[0]))
+        a_z_render = [0.0, a_half_span * math.tan(math.radians(a_dihedral_render))]
+    freecad_n_fuse = 2.0 if int(scheme_fuse) == 1 else 1.0
     return [
         float(f_geo[5]), float(f_geo[3]), float(f_root), float(f_tip),
         float(f_x[0]), float(f_y[0]), float(f_z[0]),
         float(f_x[1]), float(f_y[1]), float(f_z[1]),
         float(a_geo[5]), float(a_geo[3]), float(a_root), float(a_tip),
-        float(a_x[0] + case["a_x_loc"]), float(a_y[0]), float(a_z[0]),
-        float(a_x[1] + case["a_x_loc"]), float(a_y[1]), float(a_z[1]),
+        float(a_x[0] + case["a_x_loc"]), float(a_y[0]), float(a_z_render[0]),
+        float(a_x[1] + case["a_x_loc"]), float(a_y[1]), float(a_z_render[1]),
         float(v_root), float(v_tip),
         float(v_x[0] + v_loc), float(v_y[0]), float(v_z[0]),
         float(v_x[1] + v_loc), float(v_y[1]), float(v_z[1]),
         float(fuse_geo[0]), float(fuse_geo[1]), float(fuse_geo[2]),
-        fuse_d, float(fuse_geo[5]), 1.0 if v_geo[6] > 0 else 0.0, float(scheme_fuse), distance_two_fuse,
+        fuse_d, float(fuse_geo[5]), 1.0 if v_geo[6] > 0 else 0.0, freecad_n_fuse, distance_two_fuse,
     ]
 
 
@@ -632,14 +693,15 @@ def evaluate_candidate(
     ce1: float = 0.285,
     ce2: float = 0.27,
 ) -> tuple[float, ...]:
-    mission_l_km = float(os.environ.get("NEW20_MISSION_L_KM", "3000"))
-    avl_kk_base = int(kk) * 10000
-    m0_guess = max(1.0, float(row["m0"]))
-    final_row = with_secondary_inputs(row, m0_guess)
-    core = _candidate_core(
-        final_row, backend, avl_kk_base, m0_guess, mission_l_km,
-        w_rpm, gamma, ce1, ce2, type_power, mpay,
-    )
+    with prof.timer("fixed_point_candidate", kk=int(kk)):
+        mission_l_km = float(os.environ.get("NEW20_MISSION_L_KM", "3000"))
+        avl_kk_base = int(kk) * 10000
+        m0_guess = max(1.0, float(row["m0"]))
+        final_row = with_secondary_inputs(row, m0_guess)
+        core = _candidate_core(
+            final_row, backend, avl_kk_base, m0_guess, mission_l_km,
+            w_rpm, gamma, ce1, ce2, type_power, mpay,
+        )
 
     f_geo = core["f_geo"]
     a_geo = core["a_geo"]

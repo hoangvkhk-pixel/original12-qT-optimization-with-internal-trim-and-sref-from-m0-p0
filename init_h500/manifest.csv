@@ -8,6 +8,6 @@ normal_2_3,normal_2_3_initial_population_140.npy,140,0.2,0.5,0.5,1.0,30.0,50.0
 normal_3_1,normal_3_1_initial_population_140.npy,140,0.2,0.5,1.0,0.0,30.0,50.0
 normal_3_2,normal_3_2_initial_population_140.npy,140,0.2,0.5,1.0,0.5,0.0,0.0
 normal_3_3,normal_3_3_initial_population_140.npy,140,0.2,0.5,1.0,1.0,30.0,50.0
-duck_1_x,duck_1_x_initial_population_140.npy,140,0.6,0.8,0.0,0.5,0.0,10.0
-duck_2_x,duck_2_x_initial_population_140.npy,140,0.6,0.8,0.5,0.5,0.0,10.0
-duck_3_x,duck_3_x_initial_population_140.npy,140,0.6,0.8,1.0,0.5,0.0,10.0
+duck_1_x,duck_1_x_initial_population_140.npy,140,0.5,0.8,0.0,0.5,0.0,10.0
+duck_2_x,duck_2_x_initial_population_140.npy,140,0.5,0.8,0.5,0.5,0.0,10.0
+duck_3_x,duck_3_x_initial_population_140.npy,140,0.5,0.8,1.0,0.5,0.0,10.0

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pandas as pd
 
@@ -89,5 +91,51 @@ def build_geom_from_row(row: dict[str, float] | pd.Series, ac_module):
         v_area,
         float(row["a_x_loc"]),
     )
-    fuse_geo = ac_module.input_body_data(2.0, 4.0, 2.0, 0.76, 0.76, -2.0 * 0.76)
+
+    f_span, f_root_chord, _ = ac_module.lift_surface_def(f_geo)
+    a_span, a_root_chord, a_tip_chord = ac_module.lift_surface_def(a_geo)
+    _, v_root_chord, _ = ac_module.lift_surface_def(v_geo)
+    distance_two_fuse = min(float(a_span), float(f_span))
+    a_loc = float(row["a_x_loc"])
+    v_loc = float(row["a_x_loc"])
+
+    if scheme_fuse == 1:
+        fuse_diameter = 0.76 / 2.5
+    elif scheme_fuse == 2:
+        fuse_diameter = 0.76 / 1.5
+    else:
+        fuse_diameter = 0.76
+    nose_f_aspect = 2.0
+
+    if scheme_fuse == 2:
+        l_center = max(a_loc, v_loc)
+        center_f_aspect = l_center / fuse_diameter if fuse_diameter else 0.0
+        tg1 = a_loc + a_root_chord
+        tg2 = v_loc + v_root_chord
+        l_tail = max(tg1, tg2) - l_center
+        tail_f_aspect = l_tail / fuse_diameter if fuse_diameter else 0.0
+    elif scheme_fuse == 3:
+        l_center = max(a_root_chord, f_root_chord)
+        center_f_aspect = l_center / fuse_diameter if fuse_diameter else 0.0
+        tail_f_aspect = 2.0
+    else:
+        l_center = max(a_loc, v_loc)
+        center_f_aspect = l_center / fuse_diameter if fuse_diameter else 0.0
+        chord_i = (a_tip_chord - a_root_chord) * distance_two_fuse / a_span + a_root_chord if abs(a_span) > 1e-12 else a_root_chord
+        tg1 = a_loc + a_root_chord
+        tg2 = v_loc + v_root_chord
+        tg3 = a_loc + chord_i + distance_two_fuse * math.tan(math.radians(float(a_geo[1]))) / 2.0
+        l_tail = max(tg1, tg2, tg3) - l_center
+        tail_f_aspect = l_tail / fuse_diameter if fuse_diameter else 0.0
+
+    l_nose = nose_f_aspect * fuse_diameter
+    fuse_x_loc = a_loc - l_nose if (a_s_rel > 0.5 and scheme_fuse == 3) else -l_nose
+    fuse_geo = ac_module.input_body_data(
+        nose_f_aspect,
+        center_f_aspect,
+        tail_f_aspect,
+        fuse_diameter,
+        fuse_diameter,
+        fuse_x_loc,
+    )
     return np.asarray(f_geo), np.asarray(a_geo), np.asarray(v_geo), np.asarray(fuse_geo), scheme_fuse

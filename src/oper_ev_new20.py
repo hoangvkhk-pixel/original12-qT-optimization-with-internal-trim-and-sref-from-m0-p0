@@ -32,25 +32,60 @@ def multijob(des_par, mpay, w_rpm, t, margin, type_power, gamma, Ce1, Ce2, cores
     return tuple(np.asarray(col, dtype=float) for col in out)
 
 
-def pen_fun(mz, mx_beta, my_beta, cy, delta, alpha, A, biaz_mz, max_cy,
-            min_delta, max_delta, min_alpha, max_alpha, min_A, max_A):
+def pen_components(mz, mx_beta, my_beta, cy, delta, alpha, A, biaz_mz, max_cy,
+                   min_delta, max_delta, min_alpha, max_alpha, min_A, max_A,
+                   mz_omegaz=None):
     penalize_mz = str(__import__("os").environ.get("NEW20_PENALIZE_MZ", "0")).strip() not in {"", "0", "false", "False"}
+    env = __import__("os").environ
+    penalize_damp = env.get("NEW20_PENALIZE_MZ_OMEGAZ", "0").strip().lower() in {"1", "true", "yes", "on"}
+    min_mz_omegaz = float(env.get("NEW20_MIN_MZ_OMEGAZ", "-5"))
+    if mz_omegaz is None:
+        mz_omegaz = np.full(len(cy), -1.0e9, dtype=float)
     psi = []
+    pen_mz_arr = []
+    pen_beta_arr = []
+    pen_cy_arr = []
+    pen_alphadelta_arr = []
+    pen_A_arr = []
+    pen_damp_arr = []
     for i in range(len(cy)):
-        ep_sum = 0.0
+        pen_mz = 0.0
         if penalize_mz:
-            ep_sum += max(0.0, abs(float(mz[i])) - biaz_mz)
-        ep_sum += max(0.0, float(mx_beta[i]))
-        ep_sum += max(0.0, float(my_beta[i]))
-        ep_sum += max(0.0, float(cy[i]) - max_cy)
-        ep_sum += max(0.0, min_delta - float(delta[i]))
-        ep_sum += max(0.0, float(delta[i]) - max_delta)
-        ep_sum += max(0.0, min_alpha - float(alpha[i]))
-        ep_sum += max(0.0, float(alpha[i]) - max_alpha)
-        ep_sum += max(0.0, min_A - float(A[i]))
-        ep_sum += max(0.0, float(A[i]) - max_A)
+            pen_mz = max(0.0, abs(float(mz[i])) - biaz_mz)
+        pen_beta = max(0.0, float(mx_beta[i])) + max(0.0, float(my_beta[i]))
+        pen_cy = max(0.0, float(cy[i]) - max_cy)
+        pen_alphadelta = 0.0
+        pen_alphadelta += max(0.0, min_delta - float(delta[i]))
+        pen_alphadelta += max(0.0, float(delta[i]) - max_delta)
+        pen_alphadelta += max(0.0, min_alpha - float(alpha[i]))
+        pen_alphadelta += max(0.0, float(alpha[i]) - max_alpha)
+        pen_A = max(0.0, min_A - float(A[i])) + max(0.0, float(A[i]) - max_A)
+        pen_damp = max(0.0, float(mz_omegaz[i]) - min_mz_omegaz) if penalize_damp else 0.0
+        ep_sum = pen_mz + pen_beta + pen_cy + pen_alphadelta + pen_A + pen_damp
         psi.append(ep_sum)
-    return np.asarray(psi, dtype=float)
+        pen_mz_arr.append(pen_mz)
+        pen_beta_arr.append(pen_beta)
+        pen_cy_arr.append(pen_cy)
+        pen_alphadelta_arr.append(pen_alphadelta)
+        pen_A_arr.append(pen_A)
+        pen_damp_arr.append(pen_damp)
+    return (
+        np.asarray(psi, dtype=float),
+        np.asarray(pen_mz_arr, dtype=float),
+        np.asarray(pen_beta_arr, dtype=float),
+        np.asarray(pen_cy_arr, dtype=float),
+        np.asarray(pen_alphadelta_arr, dtype=float),
+        np.asarray(pen_A_arr, dtype=float),
+        np.asarray(pen_damp_arr, dtype=float),
+    )
+
+
+def pen_fun(mz, mx_beta, my_beta, cy, delta, alpha, A, biaz_mz, max_cy,
+            min_delta, max_delta, min_alpha, max_alpha, min_A, max_A, mz_omegaz=None):
+    return pen_components(
+        mz, mx_beta, my_beta, cy, delta, alpha, A, biaz_mz, max_cy,
+        min_delta, max_delta, min_alpha, max_alpha, min_A, max_A, mz_omegaz
+    )[0]
 
 
 def fit_fun(obj, pen, max_obj, R=100):
@@ -139,7 +174,8 @@ def pop_reduction_exponential(max_eval_f, init_pop, min_pop, num_eval_f):
     return round(init_pop * (min_pop / init_pop) ** (num_eval_f / max_eval_f))
 
 
-def new_generation(new_pop, Pg_new, Lx_new, info_wing_new, psi_new, Fx_new, info_to_FreeCAD_new):
+def new_generation(new_pop, Pg_new, Lx_new, info_wing_new, psi_new, Fx_new, info_to_FreeCAD_new, *extra_arrays):
+    extras = [np.asarray(arr) for arr in extra_arrays]
     while Lx_new.size > new_pop:
         idx = int(np.argmax(Lx_new))
         Pg_new = np.delete(Pg_new, idx, axis=0)
@@ -148,4 +184,5 @@ def new_generation(new_pop, Pg_new, Lx_new, info_wing_new, psi_new, Fx_new, info
         psi_new = np.delete(psi_new, idx)
         Fx_new = np.delete(Fx_new, idx)
         info_to_FreeCAD_new = np.delete(info_to_FreeCAD_new, idx, axis=0)
-    return Pg_new, Lx_new, info_wing_new, psi_new, Fx_new, info_to_FreeCAD_new
+        extras = [np.delete(arr, idx, axis=0) for arr in extras]
+    return (Pg_new, Lx_new, info_wing_new, psi_new, Fx_new, info_to_FreeCAD_new, *extras)

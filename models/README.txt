@@ -1,9 +1,9 @@
-This folder is intentionally shipped without trained checkpoints.
+Copy the trained dual-layout models here before optimization:
+  models\aero_mlp_original12_normal_oldbranch_300k
+  models\aero_mlp_original12_duck_oldbranch_300k
 
-After running:
-- run_retrain_qmission_260k_khead_common_split_cy06.bat
-
-the package will create:
-- aero_mlp_original12_common_qkhead_260k
-- aero_mlp_original12_normal_qkhead_260k
-- aero_mlp_original12_duck_qkhead_260k
+Each model folder must contain:
+  aero_mlp_v2_best.keras
+  scaler_X.joblib
+  scaler_Y.joblib
+  metrics.json

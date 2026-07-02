@@ -1,4 +1,1 @@
-Logic 1: internal trim, alpha/delta solved inside each evaluation.
-Objective: q_g_per_ton_km.
-Run: run_all_10cores.bat
-Sequence: MLP first, then AVL, using the same branch initial populations.
+Run `run_mlp_10cores.bat` for MLP qT oldbranch damp20, or `run_avl_10cores.bat` for AVL reference.
